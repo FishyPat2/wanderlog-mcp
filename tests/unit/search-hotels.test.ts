@@ -681,3 +681,111 @@ describe("searchHotels (handler)", () => {
     expect(conciseJson.offers[0].deals).toHaveLength(1);
   });
 });
+
+describe("hotel search validation and session isolation", () => {
+  const args = { geo_id: 80, check_in: "2026-06-01", check_out: "2026-06-03" };
+
+  it.each([
+    { check_in: "2026-02-30" },
+    { check_out: "2026-06-31" },
+    { check_in: "2026-13-01" },
+    { price_range: [200, 100] as [number, number] },
+    { currency: "u$d" },
+  ])("rejects invalid arguments before any session mutation: %j", async (invalid) => {
+    let touched = false;
+    const ctx = handlerCtx({
+      getGeo: async () => {
+        touched = true;
+        throw new Error("should not fetch");
+      },
+      setCurrencyPreference: async () => {
+        touched = true;
+      },
+    });
+    const result = await searchHotels(ctx, { ...args, ...invalid });
+    expect(result.isError).toBe(true);
+    expect(touched).toBe(false);
+  });
+
+  it("validates bounds before changing session currency", async () => {
+    let changed = false;
+    const result = await searchHotels(
+      handlerCtx({
+        getGeo: async () => ({ id: 80, name: "Pattaya" }),
+        setCurrencyPreference: async () => {
+          changed = true;
+        },
+      }),
+      { ...args, currency: "EUR" },
+    );
+    expect(result.isError).toBe(true);
+    expect(changed).toBe(false);
+  });
+
+  it("keeps concurrent currency settings stable through complete searches", async () => {
+    let currency = "USD";
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const ctx = handlerCtx({
+      setCurrencyPreference: async (value) => {
+        currency = value;
+        events.push(`set:${value}`);
+      },
+      searchLodgings: async () => {
+        const expected = currency;
+        events.push(`start:${expected}`);
+        if (expected === "EUR") {
+          firstStarted();
+          await firstGate;
+        }
+        events.push(`end:${currency}`);
+        const offer = makeOffer(expected);
+        offer.priceRate!.currencyCode = currency;
+        return { isComplete: true, offers: [offer] };
+      },
+    });
+    const first = searchHotels(ctx, { ...args, currency: "EUR" });
+    await started;
+    const second = searchHotels(ctx, { ...args, currency: "JPY" });
+    const third = searchHotels(ctx, args);
+    await Promise.resolve();
+    releaseFirst();
+    const results = await Promise.all([first, second, third]);
+    expect(events).toEqual([
+      "set:EUR",
+      "start:EUR",
+      "end:EUR",
+      "set:JPY",
+      "start:JPY",
+      "end:JPY",
+      "start:JPY",
+      "end:JPY",
+    ]);
+    expect(results.map((r) => JSON.parse(r.content[0]!.text).offers[0].currency)).toEqual([
+      "EUR",
+      "JPY",
+      "JPY",
+    ]);
+  });
+
+  it("releases the session lock after a failed request", async () => {
+    let attempts = 0;
+    const ctx = handlerCtx({
+      searchLodgings: async () => {
+        if (++attempts === 1) throw new Error("network failed");
+        return { isComplete: true, offers: [] };
+      },
+    });
+    const results = await Promise.all([searchHotels(ctx, args), searchHotels(ctx, args)]);
+    expect(results[0]!.isError).toBe(true);
+    expect(results[1]!.isError).toBeUndefined();
+    expect(attempts).toBe(2);
+  });
+});

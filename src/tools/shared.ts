@@ -29,12 +29,14 @@ async function withSubmitLock<T>(tripKey: string, fn: () => Promise<T>): Promise
   // Chain regardless of whether the previous op succeeded or failed —
   // one failed op should not permanently block the queue.
   const next = prev.then(fn, fn);
-  // The map always holds a never-rejecting tail so the next caller can chain
-  // onto it safely. Dead promises are negligible; the map is keyed by trip.
-  submitLocks.set(
-    tripKey,
-    next.catch(() => {}),
+  const tail = next.then(
+    () => {},
+    () => {},
   );
+  submitLocks.set(tripKey, tail);
+  void tail.then(() => {
+    if (submitLocks.get(tripKey) === tail) submitLocks.delete(tripKey);
+  });
   return next;
 }
 
@@ -46,8 +48,8 @@ async function withSubmitLock<T>(tripKey: string, fn: () => Promise<T>): Promise
  * Rules:
  * - Per-trip mutex: concurrent calls on the same trip serialize automatically.
  * - Each successful batch is applied to the stable entry before `submit` returns.
- * - Ambiguous submit failures and local apply failures invalidate the cache.
- * - Confirmed server rejections and callback errors leave the cache intact.
+ * - Failed submits and local apply failures invalidate the cache.
+ * - Callback validation errors leave the cache intact.
  */
 export async function submitOp<T>(
   ctx: AppContext,
@@ -58,15 +60,20 @@ export async function submitOp<T>(
     const entry = await ctx.tripCache.getEntry(tripKey);
     const client = ctx.pool.get(tripKey);
     const submit = async (ops: Json0Op[]): Promise<void> => {
+      const snapshotVersion = entry.version;
       try {
         if (!client.isSubscribed) {
           throw new WanderlogError(`Trip ${tripKey} is not subscribed`, "not_subscribed");
         }
         await submitWithRateLimitRetry(client, ops);
-      } catch (err) {
-        if (!isConfirmedNonApplication(err)) {
-          ctx.tripCache.invalidate(tripKey);
+        if (entry.version !== snapshotVersion) {
+          throw new WanderlogError(
+            "Trip changed while this edit was in flight. The edit may have been applied; read the trip again before retrying.",
+            "mutation_conflict",
+          );
         }
+      } catch (err) {
+        ctx.tripCache.invalidate(tripKey);
         throw err;
       }
 
@@ -82,29 +89,26 @@ export async function submitOp<T>(
   });
 }
 
-const CONFIRMED_NON_APPLICATION_CODES = new Set([
-  "empty_op",
-  "rate_limited",
-  "ws_not_open",
-  "ws_op_rejected",
-]);
-
-function isConfirmedNonApplication(err: unknown): boolean {
-  return err instanceof WanderlogError && CONFIRMED_NON_APPLICATION_CODES.has(err.code);
-}
-
 const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
 
 // A rate-limited op (code 4001) is rejected before the server processes it —
 // it never acks and never applies — so resubmitting the same ops at the same
-// version is safe. Burst mutations (e.g. an LLM building a full itinerary)
+// version is safe. A remote edit during backoff changes numeric paths, so abort
+// instead of retrying those paths against the newer version. Burst mutations
 // hit the limit routinely; waiting out the window beats surfacing an error.
 async function submitWithRateLimitRetry(
-  client: { submit(ops: Json0Op[]): Promise<void> },
+  client: { readonly version: number; submit(ops: Json0Op[]): Promise<void> },
   ops: Json0Op[],
 ): Promise<void> {
+  const originalVersion = client.version;
   let attempt = 0;
   for (;;) {
+    if (client.version !== originalVersion) {
+      throw new WanderlogError(
+        "Trip changed while retrying a rate-limited edit; reload the trip and resolve its target again.",
+        "stale_snapshot",
+      );
+    }
     try {
       await client.submit(ops);
       return;
