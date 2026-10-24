@@ -88,4 +88,34 @@ describe("requireAuth", () => {
     expect(getUser).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])("redacts credentials from tool text with isError=%s", async (isError) => {
+    const cookie = "s%3Atest-session.signature";
+    const ctx = createContext(vi.fn(), true);
+    ctx.config = {
+      cookieHeader: `connect.sid=${cookie}; secondary=other-secret`,
+    } as AppContext["config"];
+    const handler = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: `Upstream echoed ${cookie}, ${decodeURIComponent(cookie)}, ${ctx.config.cookieHeader}`,
+        },
+      ],
+      isError,
+    });
+    const result = await requireAuth(ctx, handler)({});
+    expect(result.isError).toBe(isError);
+    expect(result.content[0]?.text).toBe("Upstream echoed [REDACTED], [REDACTED], [REDACTED]");
+  });
+
+  it("returns a redacted MCP tool error for an uncaught handler failure", async () => {
+    const ctx = createContext(vi.fn(), true);
+    ctx.config = { cookieHeader: "connect.sid=s%3Aprivate.signature" } as AppContext["config"];
+    const handler = vi.fn().mockRejectedValue(new Error("Socket URL echoed s:private.signature"));
+    await expect(requireAuth(ctx, handler)({})).resolves.toEqual({
+      content: [{ type: "text", text: "Unexpected error: Socket URL echoed [REDACTED]" }],
+      isError: true,
+    });
+  });
 });

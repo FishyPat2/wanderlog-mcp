@@ -42,6 +42,8 @@ export class RestClient {
     const url = `${this.config.baseUrl}${path}`;
     const init: Parameters<typeof fetch>[1] = {
       method,
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
       headers: this.headers(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
     };
     if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
@@ -49,10 +51,8 @@ export class RestClient {
     let response: Response;
     try {
       response = await fetch(url, init);
-    } catch (err) {
-      throw new WanderlogNetworkError(
-        `Request to ${method} ${path} failed: ${(err as Error).message}`,
-      );
+    } catch {
+      throw new WanderlogNetworkError(`Request to ${method} ${path} failed or timed out`);
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -75,14 +75,21 @@ export class RestClient {
       );
     }
 
+    let payload: T;
     try {
-      return (await response.json()) as T;
-    } catch (err) {
-      throw new WanderlogError(
-        `Failed to parse JSON from ${path}: ${(err as Error).message}`,
-        "parse_error",
-      );
+      payload = (await response.json()) as T;
+    } catch {
+      throw new WanderlogError(`Failed to parse JSON from ${path}`, "parse_error");
     }
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "success" in payload &&
+      payload.success === false
+    ) {
+      throw new WanderlogError("Wanderlog rejected the request", "upstream_rejected");
+    }
+    return payload;
   }
 
   async getUser(): Promise<User> {

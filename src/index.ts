@@ -19,7 +19,7 @@ async function main() {
     const user = await ctx.rest.getUser();
     ctx.userId = user.id;
     ctx.authenticated = true;
-    process.stderr.write(`[wanderdog] authenticated as ${user.username} (${user.id})\n`);
+    process.stderr.write("[wanderdog] authenticated\n");
   } catch (err) {
     const msg = err instanceof WanderlogError ? err.toUserMessage() : (err as Error).message;
     process.stderr.write(
@@ -31,12 +31,18 @@ async function main() {
   const server = buildServer(ctx);
   const transport = new StdioServerTransport();
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write(`[wanderdog] ${signal} received, shutting down\n`);
     ctx.pool.closeAll();
     await server.close();
     process.exit(0);
   };
+  // The SDK transport does not handle stdin EOF; persistent trip sockets otherwise
+  // keep the process alive after its client has disconnected.
+  process.stdin.once("end", () => void shutdown("stdin EOF"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
