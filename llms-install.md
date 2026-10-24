@@ -1,6 +1,10 @@
 # llms-install.md
 
-Wanderdog is a **local stdio MCP server** distributed as an npm package.
+Wanderdog supports local stdio and optional Streamable HTTP MCP.
+
+The npm commands below install the published upstream package. For this fork's unreleased
+changes, build the checkout and configure `node /absolute/path/wanderlog-mcp/dist/index.js`.
+See [README](README.md) for Codex CLI/app, Claude Code/Desktop, HTTP authentication, and troubleshooting.
 
 ## Install method
 

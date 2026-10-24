@@ -1,0 +1,156 @@
+{
+  "baselineCommit": "02c8165daf16591cfe55f5b7ad7029adaaae5846",
+  "reproduction": "node --import tsx scripts/benchmark-mcp.ts",
+  "baseline": {
+    "method": "UTF-8 bytes, not model tokens; SDK in-memory transport, synthetic 134-place/14-day trip",
+    "tools": 33,
+    "definitionsBytes": 53510,
+    "inputSchemasSha256": "331d6291981900c70c1ab1e086ddb4899814522304afcd213e4759c1184b9a1e",
+    "instructionsBytes": 3773,
+    "responses": {
+      "list_trips": {
+        "bytes": 727,
+        "sha256": "0e7fff2be8ecf2b7e18a78dedca872fad151400ed130557dd36dedb17d987357",
+        "mcpCalls": 1,
+        "restCalls": 1,
+        "submits": 0
+      },
+      "multi_day": {
+        "bytes": 6204,
+        "sha256": "8fedbda4849ab69cd58b21b267b9f139e444829ceb97f51a492f24b6943b31f4",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "single_day": {
+        "bytes": 465,
+        "sha256": "14712711511ba8402a7217f550bca49600a560b88813fffa106004bc2e97d415",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "detailed_trip": {
+        "bytes": 19576,
+        "sha256": "3cc0a355a3619e6d10cd72fb6c76f354f56c48114d6c14ad0446ddf7420fc147",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "place_search": {
+        "bytes": 86,
+        "sha256": "2a3fb22b2a097e401efb098fda6bf8af15a4c057fe0a97e8d01d9d3d308579c3",
+        "mcpCalls": 1,
+        "restCalls": 1,
+        "submits": 0
+      },
+      "hotel_search": {
+        "bytes": 1543,
+        "sha256": "b32fcc6bef78e7e0daa619872a5091a6b8001300d29eb9d9b7b2676c74adbce4",
+        "semanticSha256": "8f4533b002f591ff55b77121ae225dcde1a85861405346f37e239512b58e77c9",
+        "prettyEnvelopeSha256": "b32fcc6bef78e7e0daa619872a5091a6b8001300d29eb9d9b7b2676c74adbce4",
+        "mcpCalls": 1,
+        "restCalls": 2,
+        "submits": 0
+      },
+      "itinerary_add": {
+        "bytes": 146,
+        "sha256": "1d830abc42f3f719ab1ca793872a5a4162bb45b7d01fe801a3a9ec14fc0b4024",
+        "mcpCalls": 1,
+        "restCalls": 2,
+        "submits": 3
+      },
+      "itinerary_edit": {
+        "bytes": 120,
+        "sha256": "f28d8df5fd8a19b33417f1be243d4899407855d9ee4c7889f8ba770d119033cd",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 2
+      },
+      "failure": {
+        "bytes": 321,
+        "sha256": "79d0d70d1fcd625db647fbf0e736353fec77113a3f209e5e832255569c5c803c",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      }
+    }
+  },
+  "reviewed": {
+    "method": "UTF-8 bytes, not model tokens; SDK in-memory transport, synthetic 134-place/14-day trip",
+    "tools": 33,
+    "definitionsBytes": 54364,
+    "inputSchemasSha256": "331d6291981900c70c1ab1e086ddb4899814522304afcd213e4759c1184b9a1e",
+    "instructionsBytes": 1166,
+    "responses": {
+      "list_trips": {
+        "bytes": 727,
+        "sha256": "0e7fff2be8ecf2b7e18a78dedca872fad151400ed130557dd36dedb17d987357",
+        "mcpCalls": 1,
+        "restCalls": 1,
+        "submits": 0
+      },
+      "multi_day": {
+        "bytes": 6204,
+        "sha256": "8fedbda4849ab69cd58b21b267b9f139e444829ceb97f51a492f24b6943b31f4",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "single_day": {
+        "bytes": 465,
+        "sha256": "14712711511ba8402a7217f550bca49600a560b88813fffa106004bc2e97d415",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "detailed_trip": {
+        "bytes": 19576,
+        "sha256": "3cc0a355a3619e6d10cd72fb6c76f354f56c48114d6c14ad0446ddf7420fc147",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      },
+      "place_search": {
+        "bytes": 86,
+        "sha256": "2a3fb22b2a097e401efb098fda6bf8af15a4c057fe0a97e8d01d9d3d308579c3",
+        "mcpCalls": 1,
+        "restCalls": 1,
+        "submits": 0
+      },
+      "hotel_search": {
+        "bytes": 928,
+        "sha256": "12b1df62de5c09473cee751a773d972974ca6d2d49985f911781b1538bba4807",
+        "semanticSha256": "8f4533b002f591ff55b77121ae225dcde1a85861405346f37e239512b58e77c9",
+        "prettyEnvelopeSha256": "b32fcc6bef78e7e0daa619872a5091a6b8001300d29eb9d9b7b2676c74adbce4",
+        "mcpCalls": 1,
+        "restCalls": 2,
+        "submits": 0
+      },
+      "itinerary_add": {
+        "bytes": 146,
+        "sha256": "1d830abc42f3f719ab1ca793872a5a4162bb45b7d01fe801a3a9ec14fc0b4024",
+        "mcpCalls": 1,
+        "restCalls": 2,
+        "submits": 3
+      },
+      "itinerary_edit": {
+        "bytes": 120,
+        "sha256": "f28d8df5fd8a19b33417f1be243d4899407855d9ee4c7889f8ba770d119033cd",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 2
+      },
+      "failure": {
+        "bytes": 321,
+        "sha256": "79d0d70d1fcd625db647fbf0e736353fec77113a3f209e5e832255569c5c803c",
+        "mcpCalls": 1,
+        "restCalls": 0,
+        "submits": 0
+      }
+    }
+  },
+  "runtime": {
+    "node": "v24.19.0",
+    "npm": "11.9.0"
+  }
+}
