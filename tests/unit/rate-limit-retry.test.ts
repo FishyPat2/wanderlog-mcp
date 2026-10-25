@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppContext } from "../../src/context.ts";
 import { WanderlogError } from "../../src/errors.ts";
-import type { Json0Op } from "../../src/ot/apply.ts";
+import { applyOp, type Json0Op } from "../../src/ot/apply.ts";
 import { submitOp } from "../../src/tools/shared.ts";
 import { ShareDBClient } from "../../src/transport/sharedb.ts";
 
@@ -74,7 +74,51 @@ describe("submitOp rate-limit retry", () => {
     expect(fake.invalidateCount()).toBe(0);
   });
 
-  it("gives up after exhausting retries without invalidating the cache", async () => {
+  it("does not retry stale numeric paths after a remote insertion during backoff", async () => {
+    const entry = {
+      snapshot: { itinerary: { sections: [{ blocks: [{ id: 1, text: "original" }] }] } },
+      version: 0,
+    };
+    const client = {
+      isSubscribed: true,
+      version: 0,
+      submit: vi.fn().mockRejectedValue(rateLimitError()),
+    };
+    const invalidate = vi.fn();
+    const applyLocalOp = vi.fn();
+    const ctx = {
+      pool: { get: () => client },
+      tripCache: { getEntry: async () => entry, invalidate, applyLocalOp },
+    } as unknown as AppContext;
+    const edit: Json0Op[] = [
+      {
+        p: ["itinerary", "sections", 0, "blocks", 0, "text"],
+        od: "original",
+        oi: "edited",
+      },
+    ];
+    const mutation = submitOp(ctx, "tripA", (_entry, submit) => submit(edit));
+    const assertion = expect(mutation).rejects.toMatchObject({ code: "stale_snapshot" });
+    await vi.advanceTimersByTimeAsync(10);
+    entry.snapshot = applyOp(entry.snapshot, [
+      {
+        p: ["itinerary", "sections", 0, "blocks", 0],
+        li: { id: 2, text: "remote insert" },
+      },
+    ]);
+    entry.version = client.version = 1;
+    await vi.advanceTimersByTimeAsync(2_000);
+    await assertion;
+    expect(client.submit).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith("tripA");
+    expect(applyLocalOp).not.toHaveBeenCalled();
+    expect(entry.snapshot.itinerary.sections[0]!.blocks).toEqual([
+      { id: 2, text: "remote insert" },
+      { id: 1, text: "original" },
+    ]);
+  });
+
+  it("invalidates the cache after exhausting retries", async () => {
     const fake = makeFakeContext([
       rateLimitError(),
       rateLimitError(),
@@ -89,18 +133,18 @@ describe("submitOp rate-limit retry", () => {
     await assertion;
     expect(fake.submitCalls()).toBe(4);
     expect(fake.applyLocalOpCount()).toBe(0);
-    expect(fake.invalidateCount()).toBe(0);
+    expect(fake.invalidateCount()).toBe(1);
   });
 
   it.each(["empty_op", "ws_not_open", "ws_op_rejected"])(
-    "preserves the cache after confirmed non-application error %s",
+    "invalidates the cache after rejected submit %s",
     async (code) => {
       const fake = makeFakeContext([new WanderlogError("rejected", code)]);
       await expect(
         submitOp(fake.ctx, "tripA", (_entry, submit) => submit(ops)),
       ).rejects.toMatchObject({ code });
       expect(fake.submitCalls()).toBe(1);
-      expect(fake.invalidateCount()).toBe(0);
+      expect(fake.invalidateCount()).toBe(1);
     },
   );
 
@@ -170,6 +214,44 @@ describe("ShareDBClient bare {code, message} rejection frames", () => {
       () => {},
     );
   }
+
+  it("attributes bare rejection frames carrying a sequence without failing other operations", async () => {
+    const { client, pending } = clientWithPendingOp();
+    const internals = client as unknown as {
+      pendingOps: Map<
+        number,
+        { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
+      >;
+    };
+    const unrelated = { resolve: vi.fn(), reject: vi.fn(), timer: setTimeout(() => {}, 60_000) };
+    internals.pendingOps.set(2, unrelated);
+    try {
+      deliverFrame(client, { code: 4001, message: "Too many requests", seq: 1 });
+      await expect(pending).rejects.toMatchObject({ code: "rate_limited" });
+      expect(internals.pendingOps.has(2)).toBe(true);
+      expect(unrelated.reject).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(unrelated.timer);
+    }
+  });
+
+  it.each([
+    { code: 4001, message: 123 },
+    { error: { message: 123 }, seq: 1 },
+  ])("handles malformed non-string upstream diagnostics without crashing", async (frame) => {
+    const { client, pending } = clientWithPendingOp();
+    expect(() => deliverFrame(client, frame)).not.toThrow();
+    await expect(pending).rejects.toThrow("123");
+  });
+
+  it("redacts the session value in upstream WebSocket errors", async () => {
+    const { client, pending } = clientWithPendingOp();
+    deliverFrame(client, { error: "Cookie connect.sid=test was rejected", seq: 1 });
+    await expect(pending).rejects.toMatchObject({
+      code: "ws_op_rejected",
+      message: "Cookie [REDACTED] was rejected",
+    });
+  });
 
   it("maps code 4001 to a rate_limited error on pending ops", async () => {
     const { client, pending } = clientWithPendingOp();

@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppContext } from "./context.js";
+import { redactCredentials } from "./config.js";
 import { VERSION } from "./version.js";
 import {
   addChecklist,
@@ -142,61 +143,43 @@ async function ensureAuthenticated(ctx: AppContext): Promise<boolean> {
 export function requireAuth(ctx: AppContext, handler: ToolHandler) {
   return async (args: Record<string, unknown>) => {
     if (!(await ensureAuthenticated(ctx))) return AUTH_ERROR_RESPONSE;
-    return handler(args);
+    const redact = (text: string) => redactCredentials(text, ctx.config?.cookieHeader ?? "");
+    try {
+      const result = await handler(args);
+      return {
+        ...result,
+        content: result.content.map((item) => ({ ...item, text: redact(item.text) })),
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: redact(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`),
+          },
+        ],
+        isError: true,
+      };
+    }
   };
 }
 
 const SERVER_INSTRUCTIONS = `
-You are connected to Wanderdog, an MCP server for building Wanderlog trip itineraries.
+Wanderlog trip tools accept natural-language place, day, and section references. Use list_trips
+for an unknown trip_key; get_trip defaults to concise output and accepts day for focused reads.
+Request detailed output for full notes, addresses, or reservation details. Unknown block types
+may be shown as unsupported; do not infer their contents.
 
-When a user asks you to create an itinerary or plan a trip, build it in full — not just a list
-of places. A complete itinerary uses these building blocks:
+Follow the user's requested scope. Add a known place directly with add_place; combine its
+note and start_time/end_time in that call. Use add_note for freestanding commentary and
+annotate_place to edit an existing place. Search places with detailed output once when an
+exact candidate place_id is needed. Search hotels to compare prices and filters before
+add_hotel. Search_guides/get_guide read other people's published guides; get_trip reads trips.
 
-  1. wanderlog_add_place — 3-5 places per day (attractions, restaurants, activities).
-     ALWAYS use the "note" parameter to attach practical context directly to the place: how to
-     get there, what to order, booking tips, opening hours. ALWAYS use "start_time" and
-     "end_time" to schedule each place (e.g. start_time: "09:00", end_time: "10:30").
-     This is one tool call instead of two — faster and the note lives on the place itself.
-  2. wanderlog_add_note — use ONLY for freestanding commentary between places: neighborhood
-     context, multi-stop transit directions, or day-level tips not about a specific place.
-     Do NOT use add_note for per-place context — use the "note" param on add_place instead.
-  3. wanderlog_add_hotel — one hotel block covering the full stay. When the user wants to
-     compare hotels by price or filter by amenities/rating, call wanderlog_search_hotels
-     FIRST — it returns ranked offers across airbnb/expedia/google/kayak with per-vendor
-     deal comparison and a faceted available_filters block — then pass the chosen hotel
-     name to wanderlog_add_hotel.
-  4. wanderlog_add_checklist — at least one pre-trip checklist (visa, currency, offline maps,
-     return ticket, travel insurance) and per-day checklists for days that need advance prep
-  5. wanderlog_add_expense — add estimated costs for meals, entrance fees, transport passes.
-     Link each expense to its place for budget tracking.
-  6. wanderlog_annotate_place — update an existing place with a note, start/end time, or both.
-  7. wanderlog_search_guides + wanderlog_get_guide — when the user wants inspiration ("give
-     me an itinerary I can copy", "what guides exist for Vietnam"), call search_guides FIRST
-     to list curated user-written guides for the destination, then get_guide with the chosen
-     guide_key to read the full content. Use this for OTHER people's published guides; for
-     your own trips use wanderlog_get_trip.
-  8. wanderlog_add_transit — ferry / bus / train legs between places (carrier, from/to, dates,
-     times). wanderlog_add_car_rental — a rental car with pick-up and drop-off locations/times.
-
-Example add_place call with all features:
-  wanderlog_add_place(trip_key, place: "Sensō-ji", day: "day 1",
-    note: "Arrive before 9am to avoid crowds. Free entry. The Nakamise shopping street
-    leading to the temple is great for souvenirs and snacks.",
-    start_time: "08:30", end_time: "10:00")
-
-Places without notes and times are just pins on a map. Rich places make an itinerary useful.
-
-JOURNALING (a trip's travelogue of places the user actually visited):
-  wanderlog_list_journal / add_journal / edit_journal / remove_journal manage the journal.
-  A journal stop is a place + date/time + a text entry (the user's notes about visiting it).
-  - wanderlog_add_journal first REUSES a place already in the trip (an itinerary place or an
-    existing journal stop) and dates the new stop to the day that place is scheduled on.
-  - If the place is NOT in the trip yet, add_journal does NOT add it silently — it returns a
-    prompt. ASK the user whether to add it to their itinerary first (wanderlog_add_place, on the
-    right day) or to journal it as a new place with allow_new_place: true. Don't pass
-    allow_new_place on the user's behalf without asking.
-  - Select a stop to edit/remove by a substring of its title (matching ignores case and accents).
-    wanderlog_edit_journal can also set the trip-level journal summary via new_summary.
+Journal tools record actual visits. Add_journal reuses trip places; if it asks about a new
+place, ask the user whether to add it to the itinerary or explicitly allow a new journal place.
+Never set allow_new_place on the user's behalf without asking. Resolve ambiguous references
+before retrying mutations; do not blindly retry a failed mutation, which may have applied.
 `.trim();
 
 export function buildServer(ctx: AppContext): McpServer {
@@ -211,6 +194,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "List Wanderlog trips",
       description: listTripsDescription,
       inputSchema: listTripsInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => listTrips(ctx, args as Parameters<typeof listTrips>[1])),
   );
@@ -221,6 +205,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Get a Wanderlog trip",
       description: getTripDescription,
       inputSchema: getTripInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => getTrip(ctx, args as Parameters<typeof getTrip>[1])),
   );
@@ -231,6 +216,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Get the wanderlog.com URL for a trip",
       description: getTripUrlDescription,
       inputSchema: getTripUrlInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => getTripUrl(ctx, args as Parameters<typeof getTripUrl>[1])),
   );
@@ -241,6 +227,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Get a trip's email-import address",
       description: getTripForwardingEmailDescription,
       inputSchema: getTripForwardingEmailInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) =>
       getTripForwardingEmail(ctx, args as Parameters<typeof getTripForwardingEmail>[1]),
@@ -253,6 +240,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Search places near a Wanderlog trip",
       description: searchPlacesDescription,
       inputSchema: searchPlacesInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => searchPlaces(ctx, args as Parameters<typeof searchPlaces>[1])),
   );
@@ -263,6 +251,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Search Wanderlog travel guides",
       description: searchGuidesDescription,
       inputSchema: searchGuidesInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => searchGuides(ctx, args as Parameters<typeof searchGuides>[1])),
   );
@@ -273,6 +262,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Read a Wanderlog travel guide",
       description: getGuideDescription,
       inputSchema: getGuideInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => getGuide(ctx, args as Parameters<typeof getGuide>[1])),
   );
@@ -283,6 +273,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Search hotels for a destination",
       description: searchHotelsDescription,
       inputSchema: searchHotelsInputSchema,
+      annotations: { destructiveHint: false, idempotentHint: true },
     },
     requireAuth(ctx, async (args) => searchHotels(ctx, args as Parameters<typeof searchHotels>[1])),
   );
@@ -293,6 +284,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Create a Wanderlog trip",
       description: createTripDescription,
       inputSchema: createTripInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => createTrip(ctx, args as Parameters<typeof createTrip>[1])),
   );
@@ -303,6 +295,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a place to a Wanderlog trip",
       description: addPlaceDescription,
       inputSchema: addPlaceInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addPlace(ctx, args as Parameters<typeof addPlace>[1])),
   );
@@ -313,6 +306,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a hotel booking to a Wanderlog trip",
       description: addHotelDescription,
       inputSchema: addHotelInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addHotel(ctx, args as Parameters<typeof addHotel>[1])),
   );
@@ -323,6 +317,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a note to a Wanderlog trip",
       description: addNoteDescription,
       inputSchema: addNoteInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addNote(ctx, args as Parameters<typeof addNote>[1])),
   );
@@ -333,6 +328,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a checklist to a Wanderlog trip",
       description: addChecklistDescription,
       inputSchema: addChecklistInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addChecklist(ctx, args as Parameters<typeof addChecklist>[1])),
   );
@@ -355,6 +351,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a budget expense to a Wanderlog trip",
       description: addExpenseDescription,
       inputSchema: addExpenseInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addExpense(ctx, args as Parameters<typeof addExpense>[1])),
   );
@@ -365,6 +362,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "List budget expenses on a Wanderlog trip",
       description: listExpensesDescription,
       inputSchema: listExpensesInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => listExpenses(ctx, args as Parameters<typeof listExpenses>[1])),
   );
@@ -449,6 +447,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Rename a day heading in a Wanderlog trip",
       description: renameDayDescription,
       inputSchema: renameDayInputSchema,
+      annotations: { idempotentHint: true },
     },
     requireAuth(ctx, async (args) => renameDay(ctx, args as Parameters<typeof renameDay>[1])),
   );
@@ -459,6 +458,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "List journal stops in a Wanderlog trip",
       description: listJournalDescription,
       inputSchema: listJournalInputSchema,
+      annotations: { readOnlyHint: true },
     },
     requireAuth(ctx, async (args) => listJournal(ctx, args as Parameters<typeof listJournal>[1])),
   );
@@ -469,6 +469,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a journal stop to a Wanderlog trip",
       description: addJournalDescription,
       inputSchema: addJournalInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addJournal(ctx, args as Parameters<typeof addJournal>[1])),
   );
@@ -505,7 +506,7 @@ export function buildServer(ctx: AppContext): McpServer {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     requireAuth(ctx, async (args) => addSection(ctx, args as Parameters<typeof addSection>[1])),
@@ -521,7 +522,7 @@ export function buildServer(ctx: AppContext): McpServer {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     requireAuth(ctx, async (args) =>
@@ -538,8 +539,8 @@ export function buildServer(ctx: AppContext): McpServer {
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
       },
     },
     requireAuth(ctx, async (args) =>
@@ -553,6 +554,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a ferry, bus, or train leg",
       description: addTransitDescription,
       inputSchema: addTransitInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addTransit(ctx, args as Parameters<typeof addTransit>[1])),
   );
@@ -563,6 +565,7 @@ export function buildServer(ctx: AppContext): McpServer {
       title: "Add a rental car",
       description: addCarRentalDescription,
       inputSchema: addCarRentalInputSchema,
+      annotations: { destructiveHint: false },
     },
     requireAuth(ctx, async (args) => addCarRental(ctx, args as Parameters<typeof addCarRental>[1])),
   );

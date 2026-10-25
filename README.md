@@ -6,7 +6,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 [![Coverage Status](https://coveralls.io/repos/github/shaikhspeare/wanderlog-mcp/badge.svg?branch=main)](https://coveralls.io/github/shaikhspeare/wanderlog-mcp?branch=main)
 
-An MCP server that lets Claude (or any MCP-compatible agent) view and build [Wanderlog](https://wanderlog.com) trip itineraries through conversation.
+An MCP server that lets Codex, Claude, and other MCP-compatible agents view and build [Wanderlog](https://wanderlog.com) trip itineraries through conversation.
 
 Instead of clicking through the Wanderlog UI to plan a trip, you just ask:
 
@@ -149,7 +149,7 @@ or duplicate targets return errors without submitting a mutation.
 
 ### Step 1 — Get your Wanderlog session cookie
 
-Wanderlog doesn't have a public API, so wanderlog-mcp authenticates using your browser session cookie (`connect.sid`). It's valid for roughly a year and never leaves your machine.
+Wanderlog doesn't have a public API, so wanderlog-mcp authenticates using your browser session cookie (`connect.sid`). It's valid for roughly a year and is sent to Wanderlog for authentication (and to your trusted host when using HTTP).
 
 **Treat it like a password** — it grants the same access you have in the Wanderlog UI.
 
@@ -258,6 +258,54 @@ WANDERLOG_COOKIE = "s%3A...your value here..."
 
 Run `/mcp` inside Codex to confirm the server loaded.
 
+#### Development checkout (Codex and Claude)
+
+The npm examples above install the published upstream package, which may not include
+this fork's unreleased changes. To run this checkout, install with `npm ci`, then
+`npm run build` (Node.js 22+). Configure either client to launch `node` with the
+absolute path `/absolute/path/wanderlog-mcp/dist/index.js` and set `WANDERLOG_COOKIE`
+in that client's environment configuration. The working directory need not be the repo.
+For Claude Code: `claude mcp add --transport stdio wanderlog -- node /absolute/path/wanderlog-mcp/dist/index.js`
+with `WANDERLOG_COOKIE` supplied securely in its environment. Claude Desktop uses the
+same `command: "node"`, absolute `args`, and `env` JSON layout shown above.
+Codex CLI and app use the same `[mcp_servers.wanderlog]` config with `command = "node"`
+and `args = ["/absolute/path/wanderlog-mcp/dist/index.js"]`.
+Restart the client after rebuilding or changing credentials. Never put cookies in command-line arguments.
+`npm run dev` loads `.env`; plain `node dist/index.js` does not load `.env` automatically.
+
+#### Optional Streamable HTTP
+
+After building, run `npm run start:http`. This loads `.env` and listens on
+`http://127.0.0.1:3000/mcp`; `/health` reports process health, not Wanderlog authentication.
+Each request requires `Authorization: Bearer <connect.sid value>`; query-string tokens
+are rejected because URLs leak into logs/history. The transport is stateless MCP;
+GET/DELETE behavior is delegated to the SDK (no persistent SSE session).
+
+Codex configuration:
+
+```toml
+[mcp_servers.wanderlog]
+url = "http://127.0.0.1:3000/mcp"
+bearer_token_env_var = "WANDERLOG_COOKIE"
+```
+
+Set that variable in the Codex process environment. Claude Code supports
+`claude mcp add --transport http wanderlog http://127.0.0.1:3000/mcp`
+with an Authorization header configured securely in its local MCP configuration.
+Prefer stdio for Claude Desktop: direct HTTP/header support depends on its version.
+
+Remote hosting must explicitly set `HOST=0.0.0.0`, terminate TLS, and restrict access.
+Set `MCP_ALLOWED_HOSTS` to a comma-separated list of trusted hostnames for DNS rebinding
+protection when binding beyond loopback. Requests with an Origin header are rejected
+unless that exact origin is listed in `MCP_ALLOWED_ORIGINS` (comma-separated); native
+clients normally omit Origin, so leave this unset unless needed. The Fly configuration opts into external binding;
+for Docker pass `-e HOST=0.0.0.0`. Hosts must redact Authorization headers in their logs.
+This is direct cookie authentication, not an OAuth authorization server.
+
+Compiled stdio and HTTP are tested with the MCP SDK and local fixtures. Actual Codex
+and Claude application sessions and Wanderlog live behavior have **not** been validated
+in this environment; protocol success alone does not establish application success.
+
 #### Smithery (one-click install)
 
 ```bash
@@ -287,12 +335,12 @@ Your cookie is expired or wrong. Re-capture it from DevTools and update your con
 The server speaks stdio MCP — it's designed to be launched by an MCP host, not run directly in a terminal. Run it through Claude Code or Claude Desktop as described above.
 
 **Tools work but the agent ignores notes/checklists**
-The server injects instructions into the MCP `initialize` response that tell the agent to interleave places and notes and add checklists. This works reliably with Claude. Other clients may vary.
+The server supplies client-neutral workflow guidance in the MCP `initialize` response. Ask explicitly for notes, times, or checklists when needed; agent behavior varies by client.
 
 ## Security
 
 - The cookie is stored only in your MCP client config, never committed or logged
-- wanderlog-mcp runs entirely on your machine — there's no relay server
+- Local stdio runs on your machine. Optional HTTP hosting sends credentials to that host; use only a trusted server over TLS.
 - The startup auth probe validates your cookie without printing its value
 - To revoke access: log out of wanderlog.com (invalidates all sessions), then re-capture
 
@@ -304,11 +352,7 @@ Pull requests are welcome. Before submitting:
 npm run build && npm run test
 ```
 
-For changes to transport or tool code, also run:
-
-```bash
-npm run test:integration
-```
+Run the offline checks and protocol fixtures described in [engineering evidence](docs/engineering-evidence.md). `npm run test:integration` is a **live, potentially mutating** suite: use only an explicitly authorized disposable account/trip.
 
 ## Disclaimer
 

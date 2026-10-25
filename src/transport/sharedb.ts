@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import type { Config } from "../config.js";
+import { redactCredentials, type Config } from "../config.js";
 import { WanderlogAuthError, WanderlogError } from "../errors.js";
 import type { Json0Op } from "../ot/apply.js";
 import type { TripPlan } from "../types.js";
@@ -208,10 +208,10 @@ export class ShareDBClient extends EventEmitter {
         }
       });
 
-      ws.on("error", (err: Error) => {
+      ws.on("error", () => {
         clearTimeout(handshakeTimeout);
         if (isStale()) return;
-        fail(err);
+        fail(new WanderlogError("WebSocket connection failed", "ws_error"));
       });
     });
   }
@@ -242,17 +242,28 @@ export class ShareDBClient extends EventEmitter {
     if (bare.a === undefined && typeof bare.code === "number") {
       const code = bare.code === 4001 ? "rate_limited" : "ws_rejected";
       const err = new WanderlogError(
-        `Wanderlog rejected the request (${bare.code}): ${bare.message ?? "unknown"}`,
+        `Wanderlog rejected the request (${bare.code}): ${redactCredentials(bare.message ?? "unknown", this.config.cookieHeader)}`,
         code,
       );
-      if (this.handshakeComplete) this.failAllPending(err);
-      else connectReject(err);
+      if (!this.handshakeComplete) {
+        connectReject(err);
+      } else if (typeof frame.seq === "number" && this.pendingOps.has(frame.seq)) {
+        const pending = this.pendingOps.get(frame.seq)!;
+        this.pendingOps.delete(frame.seq);
+        clearTimeout(pending.timer);
+        pending.reject(err);
+      } else {
+        this.failAllPending(err);
+      }
       return;
     }
 
     if (frame.error) {
       const err = frame.error as string | { message?: string };
-      const errMsg = typeof err === "string" ? err : (err.message ?? "unknown");
+      const errMsg = redactCredentials(
+        typeof err === "string" ? err : (err.message ?? "unknown"),
+        this.config.cookieHeader,
+      );
 
       if (!this.handshakeComplete) {
         connectReject(new WanderlogError(errMsg, "ws_error"));

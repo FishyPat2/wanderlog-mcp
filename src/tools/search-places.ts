@@ -32,8 +32,9 @@ destination of a Wanderlog trip. Returns candidate results with names and short 
 Use this to resolve user requests like "find a good coffee shop in Queenstown" into specific
 place candidates. Results are geographically biased toward the trip's location, not global.
 
-If the user wants to *add* a place to a trip, call this first with concise format to present
-options, then call again with detailed format to get place_ids for downstream actions.
+For a known place, call wanderlog_add_place directly by name. To compare candidates or resolve
+a wrong branch, search once with detailed format and pass the chosen place_id to add_place.
+Use concise format when only names and descriptions are needed.
 `.trim();
 
 type Args = {

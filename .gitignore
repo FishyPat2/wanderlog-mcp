@@ -6,7 +6,5 @@ dist/
 *.har
 *.log
 .DS_Store
-docs/
 evals/
-CLAUDE.md
 coverage/

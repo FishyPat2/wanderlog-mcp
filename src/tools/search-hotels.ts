@@ -14,6 +14,7 @@ import type {
 } from "../types.js";
 import type { RestClient } from "../transport/rest.js";
 import { WanderlogError, WanderlogValidationError } from "../errors.js";
+import { isValidDate } from "./shared.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SORT_VALUES = ["ratings", "price_low_to_high", "price_high_to_low", "deals"] as const;
@@ -170,6 +171,19 @@ export function validateArgs(
   ).length;
   if (modesSet !== 1) {
     throw new WanderlogValidationError("Pass exactly one of destination or geo_id.");
+  }
+  for (const key of ["check_in", "check_out"] as const) {
+    if (!isValidDate(args[key])) {
+      throw new WanderlogValidationError(
+        `Invalid ${key}: "${args[key]}". Use a valid YYYY-MM-DD date.`,
+      );
+    }
+  }
+  if (args.price_range && args.price_range[0] > args.price_range[1]) {
+    throw new WanderlogValidationError("price_range minimum must not exceed its maximum.");
+  }
+  if (args.currency && !/^[A-Z]{3}$/.test(args.currency)) {
+    throw new WanderlogValidationError("currency must be a three-letter uppercase ISO 4217 code.");
   }
   if (args.check_out <= args.check_in) {
     throw new WanderlogValidationError(
@@ -445,6 +459,24 @@ function applied(args: SearchHotelsArgs): Record<string, unknown> {
   return out;
 }
 
+const sessionSearchLocks = new WeakMap<RestClient, Promise<void>>();
+
+async function withSessionSearchLock<T>(rest: RestClient, work: () => Promise<T>): Promise<T> {
+  const previous = sessionSearchLocks.get(rest) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  sessionSearchLocks.set(rest, current);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (sessionSearchLocks.get(rest) === current) sessionSearchLocks.delete(rest);
+  }
+}
+
 export async function searchHotels(
   ctx: AppContext,
   args: SearchHotelsArgs,
@@ -452,23 +484,16 @@ export async function searchHotels(
   try {
     const norm = validateArgs(args);
     const { geo, alternative_geos } = await resolveGeo(ctx, norm);
-    // WHY: currencyPreference is stored on the SHARED server-side Wanderlog
-    // session (POST /api/sessionStore), so setting it mutates global state for
-    // every other caller using this cookie — not just this search. Only mutate
-    // it when the caller explicitly asks for a currency; a default search must
-    // not silently change the session's currency preference. When no currency
-    // is passed, prices come back in whatever the session already uses, and we
-    // label the response from the offers' own currencyCode below.
-    if (norm.currency) {
-      await ctx.rest.setCurrencyPreference(norm.currency);
-    }
     const body = buildSearchBody(norm, geo);
-
-    const { offers, complete } = await pollSearch({
-      fetchPage: () => ctx.rest.searchLodgings(body),
-      limit: norm.limit,
-      maxRetries: POLL_MAX_RETRIES,
-      sleep: defaultSleep,
+    const { offers, complete } = await withSessionSearchLock(ctx.rest, async () => {
+      // Currency is a shared session preference, so keep it stable across every poll.
+      if (norm.currency) await ctx.rest.setCurrencyPreference(norm.currency);
+      return pollSearch({
+        fetchPage: () => ctx.rest.searchLodgings(body),
+        limit: norm.limit,
+        maxRetries: POLL_MAX_RETRIES,
+        sleep: defaultSleep,
+      });
     });
 
     const projected = offers.map(projectOffer);
@@ -504,7 +529,7 @@ export async function searchHotels(
     };
 
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(result) }],
     };
   } catch (err) {
     const e =

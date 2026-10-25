@@ -172,6 +172,43 @@ describe("submitOp per-trip mutation transaction", () => {
     });
   });
 
+  it("invalidates instead of applying stale paths when a remote edit arrives before an ack", async () => {
+    const fake = makeFakeContext({ submitDelay: 20 });
+    const entry = fake.entry();
+    entry.snapshot = {
+      counter: 0,
+      itinerary: { sections: [{ blocks: [{ id: 1, text: "original" }] }] },
+    } as unknown as Snapshot;
+    const mutation = submitOp(fake.ctx, "tripA", (_entry, submit) =>
+      submit([
+        {
+          p: ["itinerary", "sections", 0, "blocks", 0, "text"],
+          od: "original",
+          oi: "edited",
+        },
+      ]),
+    );
+    const assertion = expect(mutation).rejects.toMatchObject({
+      code: "mutation_conflict",
+      message: expect.stringContaining("may have been applied"),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    entry.snapshot = applyOp(entry.snapshot, [
+      {
+        p: ["itinerary", "sections", 0, "blocks", 0],
+        li: { id: 2, text: "remote insert" },
+      },
+    ]);
+    entry.version = 1;
+    (entry.client as unknown as FakeClient).version = 1;
+    await assertion;
+    expect(fake.counts()).toMatchObject({ invalidateCount: 1, applyLocalOpCount: 0 });
+    expect(entry.snapshot.itinerary.sections[0]!.blocks).toEqual([
+      { id: 2, text: "remote insert" },
+      { id: 1, text: "original" },
+    ]);
+  });
+
   it("invalidates on submit or local-apply failure", async () => {
     const submitFailure = makeFakeContext({ failOn: () => true });
     await expect(submitOp(submitFailure.ctx, "tripA", increment)).rejects.toThrow(

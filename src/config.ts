@@ -30,7 +30,11 @@ export function normalizeCookie(raw: string): string {
     );
   }
 
-  if (trimmed.includes("connect.sid=")) {
+  if (/[\r\n\0]/.test(trimmed)) {
+    throw new WanderlogValidationError("WANDERLOG_COOKIE contains invalid control characters");
+  }
+
+  if (/(?:^|;\s*)connect\.sid=[^;\s]+/.test(trimmed)) {
     return trimmed;
   }
 
@@ -60,4 +64,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     userAgent: env.WANDERLOG_USER_AGENT ?? DEFAULT_USER_AGENT,
     defaultCurrency: env.WANDERLOG_DEFAULT_CURRENCY,
   };
+}
+
+/** Remove session credentials even when an upstream error echoes a decoded cookie. */
+export function redactCredentials(text: string, cookieHeader: string): string {
+  text = String(text);
+  if (!cookieHeader) return text;
+  const session = cookieHeader.match(/(?:^|;\s*)connect\.sid=([^;\s]+)/)?.[1];
+  // Auxiliary cookies may be ordinary values such as "1"; replacing them corrupts data.
+  const secrets = [cookieHeader, ...(session ? [session] : [])];
+  for (const value of [...secrets]) {
+    try {
+      secrets.push(decodeURIComponent(value));
+    } catch {
+      /* Keep the original for malformed encodings. */
+    }
+  }
+  for (const value of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) {
+    text = text.split(value).join("[REDACTED]");
+  }
+  return text;
 }
